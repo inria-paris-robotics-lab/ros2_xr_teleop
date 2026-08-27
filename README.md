@@ -72,9 +72,11 @@ patch applied:
 ```bash
 git clone https://github.com/inria-paris-robotics-lab/prl_ur5_ros2.git ~/prl_ur5_ros2
 
-# apply this repo's container patches (teleop Dockerfile + the --ipc=host start script)
-cp ~/ros2_xr_teleop/patches/prl_ur5_ros2/docker-ros2/Dockerfile        ~/prl_ur5_ros2/docker-ros2/
-cp ~/ros2_xr_teleop/patches/prl_ur5_ros2/docker-ros2/start_docker.bash ~/prl_ur5_ros2/docker-ros2/
+# apply this repo's container patches (teleop Dockerfile, its vision_visp fix-up script,
+# and the --ipc=host start script) - copy all three, the Dockerfile COPYs the fix-up script
+cp ~/ros2_xr_teleop/patches/prl_ur5_ros2/docker-ros2/Dockerfile          ~/prl_ur5_ros2/docker-ros2/
+cp ~/ros2_xr_teleop/patches/prl_ur5_ros2/docker-ros2/fix_vision_visp.py  ~/prl_ur5_ros2/docker-ros2/
+cp ~/ros2_xr_teleop/patches/prl_ur5_ros2/docker-ros2/start_docker.bash   ~/prl_ur5_ros2/docker-ros2/
 ```
 
 (Or clone a `prl_ur5_ros2` fork that already has these applied and skip the two `cp`s.)

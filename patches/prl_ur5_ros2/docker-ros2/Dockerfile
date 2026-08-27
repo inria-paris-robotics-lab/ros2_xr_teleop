@@ -266,35 +266,49 @@ RUN pip3 install --user --break-system-packages --no-cache-dir \
       typing_extensions \
  && python3 -c "import pinocchio, coal; from pink.barriers import SelfCollisionBarrier; import qpsolvers; assert 'daqp' in qpsolvers.available_solvers; print('teleop deps OK:', pinocchio.__version__)"
 
-## LeRobot episode recording and replay. torch is pinned to the CPU build (lerobot
-## alone pulls ~5 GB of CUDA wheels this container has no GPU for) and numpy is
-## constrained so the pinocchio ABI stays intact. setuptools is held below 80, which
-## dropped the `develop` command colcon needs for --symlink-install.
-RUN printf 'numpy==2.5.1\nsetuptools<80\n' > /tmp/np.txt \
+## LeRobot episode recording, replay and async inference. torch is pinned to the CPU build
+## (lerobot alone pulls ~5 GB of CUDA wheels this container has no GPU for). numpy is capped
+## below 2.3 because that is lerobot's own requirement; pinocchio was verified to run fine
+## there (PinkIK builds and margin_at(HOME) returns the same 4.03 mm as on 2.5.1). setuptools
+## is held below 80, which dropped the `develop` command colcon needs for --symlink-install.
+## protobuf is capped below 7 because wandb, a lerobot dependency, refuses 7.x.
+## [async] brings grpcio+protobuf for the robot client, [dataset] brings datasets+torchcodec
+## which 0.6 needs for recording and replay; installing them
+## here rather than at runtime means they survive `docker rm`.
+RUN printf 'numpy<2.3.0\nsetuptools<80\nprotobuf<7\n' > /tmp/np.txt \
  && pip3 install --user --break-system-packages --no-cache-dir -c /tmp/np.txt \
       "torch==2.10.0+cpu" "torchvision==0.25.0+cpu" --index-url https://download.pytorch.org/whl/cpu \
  && pip3 install --user --break-system-packages --no-cache-dir -c /tmp/np.txt \
-      "lerobot==0.4.4" \
+      "lerobot[async,dataset]==0.6.1" \
  && pip3 install --user --break-system-packages --no-cache-dir --force-reinstall --no-deps \
       "torch==2.10.0+cpu" "torchvision==0.25.0+cpu" --index-url https://download.pytorch.org/whl/cpu \
  && pip3 uninstall -y --break-system-packages triton $(pip3 list --user 2>/dev/null | grep -oE '^nvidia-[a-z0-9-]+') || true \
- && python3 -c "import lerobot, torch, numpy; assert numpy.__version__=='2.5.1'; print('lerobot OK:', lerobot.__version__, 'torch', torch.__version__)"
+ && python3 -c "import lerobot, torch, numpy, grpc; from lerobot.transport import services_pb2; import importlib.metadata as m; print('lerobot OK:', m.version('lerobot'), 'torch', torch.__version__, 'numpy', numpy.__version__)"
 
 ################################
 # Dependencies that need to be built from source
 ################################
 SHELL ["/bin/bash", "-c"]
 
+## vision_visp (rolling) ships several bugs that stop visp_auto_tracker running; see the script.
+COPY fix_vision_visp.py /tmp/fix_vision_visp.py
+
 RUN mkdir -p ~/ros2_utils_ws/src && \
     cd ~/ros2_utils_ws/src && \
     git clone https://github.com/orbbec/OrbbecSDK_ROS2.git -b v2-main && \
-    #git clone https://github.com/lagadic/vision_visp.git -b rolling && \
+    git clone https://github.com/lagadic/vision_visp.git -b rolling && \
+    python3 /tmp/fix_vision_visp.py && \
     # Go to the workspace root
     cd ~/ros2_utils_ws && \
     # Source the ROS 2 environment directly
     source /opt/ros/${ROS_DISTRO}/setup.bash && \
     # Now, the environment is correctly loaded for the build command.
     colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
+
+## The apt python3-transforms3d (0.4.1) calls np.maximum_sctype, removed in NumPy 2, which breaks
+## prl_ur5_calibration. A newer one in ~/.local shadows it; --no-deps keeps lerobot's numpy pin.
+RUN pip3 install --user --break-system-packages --no-cache-dir --no-deps "transforms3d>=0.4.2" \
+ && python3 -c "import transforms3d, numpy; from transforms3d import quaternions; print('transforms3d OK:', transforms3d.__version__, 'numpy', numpy.__version__)"
 
 # --- UPDATE .bashrc ---
 # Sourcing the new workspace for future interactive shells
