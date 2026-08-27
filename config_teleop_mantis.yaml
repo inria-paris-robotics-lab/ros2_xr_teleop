@@ -231,8 +231,9 @@ record:
   # Optional 16UC1 depth, keyed by the colour camera it belongs to; each entry adds
   # observation.images.<name>_depth as a (H, W, 1) uint16 map in MILLIMETRES. The driver runs
   # with depth_registration: true, so it is already pixel-aligned to that camera's colour
-  # frame. Stored per depth_as_video (below); never the 8-bit AV1 colour codec, which cannot carry 16 bits. Comment out to drop
-  # depth; every listed stream must match the primary's trigger or the frame is skipped.
+  # frame. Storage is set by depth_as_video below (never the 8-bit AV1 colour codec, which
+  # cannot carry 16 bits). Comment out to drop depth; every listed stream must match the
+  # primary's trigger or the frame is skipped.
   depth_cameras:
     left: /camera/echo_camera/depth/image_raw
     right: /camera/foxtrot_camera/depth/image_raw
