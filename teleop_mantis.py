@@ -42,6 +42,7 @@ URDF = _cfg_path(CFG["urdf"])
 EE_FRAME = CFG["ee_frame"]
 ARM = list(CFG["arm"])
 ARM_CMD_JOINTS = list(CFG["arm_cmd_joints"])
+SAFETY_FILTER_JOINTS = list(CFG.get("safety_filter_joints", ARM_CMD_JOINTS))
 SHOULDER_JOINT = CFG.get("shoulder_joint", "left_shoulder_lift_joint")
 LOCKED_Q = dict(CFG.get("locked_q") or {})
 LOCK_OPEN = list(CFG.get("ik", {}).get("lock_open_joints", ["left_gripper_joint"]))
@@ -178,7 +179,6 @@ ORI_ANTIWIND_DEADBAND = float(CFG["teleop"].get("ori_antiwind_deadband", 0.1))
 
 PARKED_SNAPSHOT_TIMEOUT = float(CFG["teleop"].get("parked_snapshot_timeout", 5.0))
 HOLD_PARKED = bool(CFG["teleop"].get("hold_parked_joints", True))
-DEBUG_PERIOD = float(CFG["teleop"].get("debug_period", 0.5))
 SHAKE_WATCH = float(CFG["teleop"].get("shake_watch", 1.0))
 SHAKE_MIN_PP = float(CFG["teleop"].get("shake_min_pp", 0.02))
 SHAKE_MIN_HZ = float(CFG["teleop"].get("shake_min_hz", 0.5))
@@ -210,6 +210,7 @@ GRIP_RETRY_TOL = float(CFG["gripper"].get("retry_tol", 0.01))
 GRIP_DT = 1.0 / max(1.0, float(CFG["gripper"].get("rate", 50.0)))
 
 ARM_CMD_TOPIC = CFG["topics"]["arm_cmd"]
+ARM_CMD_SAFETY_TOPIC = CFG["topics"].get("arm_cmd_safety", ARM_CMD_TOPIC)
 JOINT_STATES_TOPIC = CFG["topics"]["joint_states"]
 VIVE_POSE_TOPIC = CFG["topics"].get("vive_pose", "/vive/pose")
 VIVE_BUTTONS_TOPIC = CFG["topics"].get("vive_buttons", "/vive/buttons")
@@ -1359,7 +1360,6 @@ class Bridge(Node):
         self._ori_acc_n = 0
         self._ori_acc_R = None
         self._gate_t = 0.0
-        self._debug_t = 0.0
         self._R_tcp = None
         self._shk = []
         self._shk_t = []
@@ -2400,11 +2400,6 @@ class Bridge(Node):
             q_arm = (1.0 - a) * self._blend_from + a * q_arm
             self._blend_n -= 1
 
-        if DEBUG_PERIOD > 0.0 and (now_tick - self._debug_t) >= DEBUG_PERIOD:
-            self._debug_t = now_tick
-            gap_d, gap_m, gap_pair = self.ik.min_gap()
-            print("blocked=%s min-gap=%+.4f margin=%+.4f sigma=%.4f %s"
-                  % (self.ik.blocked, gap_d, gap_m, self.ik.sigma_min, gap_pair), flush=True)
         now_m = time.monotonic()
         if self._steptimes and now_m - self._steptime_last >= 10.0:
             a = np.array(self._steptimes)

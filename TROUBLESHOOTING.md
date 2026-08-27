@@ -48,9 +48,9 @@ Fixes, in order:
    AA** in the controller.
 
 Restarting `quest_pub` or `adb` does **not** fix it — the fault is on the headset side.
-`run_quest_pub.sh` already defaults to `extrapolate`, which keeps the arm smooth at ~50 Hz
-but cannot repair bad tracking. For a full session picture, run `teleop_monitor.py start`
-before the session and `teleop_monitor.py report` after.
+The publisher passes the headset's samples through untouched, so nothing masks a degraded
+stream. For a full session picture, run `teleop_monitor.py start` before the session and
+`teleop_monitor.py report` after.
 
 ## The container has no `pip`, `pinocchio` or `lerobot`
 

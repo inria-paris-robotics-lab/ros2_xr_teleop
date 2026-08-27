@@ -279,7 +279,7 @@ _ADB_KEYS = {
 
 
 class AdbBackend(object):
-    """Quest 2 over adb via the oculus_reader APK: no SteamVR, no video stream."""
+    """Quest 2 over adb via the oculus_reader APK: one message per headset sample, no SteamVR."""
 
     name = "adb"
 
@@ -287,16 +287,9 @@ class AdbBackend(object):
         self.log = log
         self.reader = None
         self.keys = _ADB_KEYS["left" if HAND.startswith("l") else "right"]
-        self.mode = _env("QUEST_ADB_MODE", "native").strip().lower()
-        if self.mode not in ("native", "hold", "extrapolate"):
-            raise SystemExit("QUEST_ADB_MODE must be native|hold|extrapolate, got %r" % self.mode)
         self._emitted_t = None
-        self.max_extrap = _envf("QUEST_ADB_MAX_EXTRAP", "0.08")
-        self.max_v = _envf("QUEST_ADB_MAX_V", "3.0")
-        self.max_w = _envf("QUEST_ADB_MAX_W", "12.0")
         self.stale = _envf("QUEST_ADB_STALE", "0.15")
         self.keepalive = _envf("QUEST_ADB_KEEPALIVE", "0.05")
-        self.prev = None
         self.last = None
         self._last_raw_t = 0.0
         self._last_read_t = 0.0
@@ -361,7 +354,7 @@ class AdbBackend(object):
                 p, R = T[:3, 3].copy(), _orthonormalize(T[:3, :3])
                 if self.last is None or not np.array_equal(p, self.last.p) \
                         or not np.array_equal(R, self.last.R):
-                    self.prev, self.last = self.last, Sample(p, R, now)
+                    self.last = Sample(p, R, now)
                     self._last_raw_t = now
         trig = self._get(buttons, "trigger_analog", 0.0)
         if isinstance(trig, (list, tuple, np.ndarray)):
@@ -381,30 +374,11 @@ class AdbBackend(object):
                           "(headset asleep? adb dropped? app not running?)"
                           % (now - self._last_read_t), throttle_duration_sec=2.0)
             return None, btn
-        if self.mode == "native":
-            if self._emitted_t == self._last_raw_t and (now - self._emitted_at) < self.keepalive:
-                return None, btn
-            self._emitted_t = self._last_raw_t
-            self._emitted_at = now
-            return Sample(self.last.p, self.last.R, now), btn
-        if self.mode == "hold":
-            return Sample(self.last.p, self.last.R, now), btn
-
-        dt_ahead = (now - self.last.t) + POSE_PREDICTION
-        dt_ahead = max(0.0, min(dt_ahead, self.max_extrap))
-        if self.prev is None or dt_ahead <= 0.0:
-            return Sample(self.last.p, self.last.R, now), btn
-        dt = self.last.t - self.prev.t
-        if dt <= 1e-4:
-            return Sample(self.last.p, self.last.R, now), btn
-        v = (self.last.p - self.prev.p) / dt
-        w = _log3(self.last.R @ self.prev.R.T) / dt
-        nv, nw = float(np.linalg.norm(v)), float(np.linalg.norm(w))
-        if nv > self.max_v:
-            v *= self.max_v / nv
-        if nw > self.max_w:
-            w *= self.max_w / nw
-        return Sample(self.last.p + v * dt_ahead, _exp3(w * dt_ahead) @ self.last.R, now), btn
+        if self._emitted_t == self._last_raw_t and (now - self._emitted_at) < self.keepalive:
+            return None, btn
+        self._emitted_t = self._last_raw_t
+        self._emitted_at = now
+        return Sample(self.last.p, self.last.R, now), btn
 
     def scan(self):
         if not self._connect():
@@ -464,16 +438,12 @@ class QuestPub(Node):
             return
 
         self.create_timer(1.0 / RATE, self.tick)
-        if self.backend.name == "adb" and getattr(self.backend, "mode", "") == "native":
-            rate_txt = "poll %.0f Hz -> publish ~72 Hz (native, no prediction)" % RATE
+        if self.backend.name == "adb":
+            rate_txt = "poll %.0f Hz -> publish ~72 Hz (one message per headset sample)" % RATE
         else:
             rate_txt = "%.0f Hz, prediction %.0f ms" % (RATE, POSE_PREDICTION * 1000.0)
         log.info("quest_pub up | backend=%s hand=%s | pose->%s buttons->%s | %s"
                  % (self.backend.name, HAND.upper(), POSE_TOPIC, BUTTONS_TOPIC, rate_txt))
-        if self.backend.name == "adb" and getattr(self.backend, "mode", "") == "extrapolate":
-            log.warn("QUEST_ADB_MODE=extrapolate: measured on hardware 2026-08-10 to produce "
-                     "up to 158 mm jumps between ticks (39 m/s implied) and to trip the teleop's "
-                     "glitch gate into TRACKING DEGRADED. Re-run .quest_adb_diag.py before trusting it.")
         log.info("buttons: engage/freeze=%s  EPISODE=%s  HOME=%s  AXIS-LOCK=%s  gripper=trigger click (%s%s)"
                  % (ENGAGE_BUTTON, MENU_BUTTON, HOME_BUTTON, AXISLOCK_BUTTON, TRIGGER_CLICK_SRC,
                     ", on>%.2f off<%.2f" % (CLICK_ON, CLICK_OFF) if TRIGGER_CLICK_SRC == "soft" else ""))

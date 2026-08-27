@@ -6,7 +6,6 @@ ROS_SETUP="${ROS_SETUP:-$DIR/../SO-100-HTC-vive-teleop/.pixi/envs/default/setup.
 QUEST_DEPS="${QUEST_DEPS:-$DIR/../quest_deps}"
 OCULUS_READER="${OCULUS_READER:-$DIR/../oculus_reader}"
 export QUEST_BACKEND="${QUEST_BACKEND:-adb}"
-export QUEST_ADB_MODE="${QUEST_ADB_MODE:-extrapolate}"
 export QUEST_ROT_OFFSET="${QUEST_ROT_OFFSET:--90,0,0}"
 source "$ROS_SETUP" 2>/dev/null
 

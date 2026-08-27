@@ -236,7 +236,7 @@ Canonical setup: robot stack and teleop **in the container**, controller publish
 ros2 launch prl_ur5_run real.launch.py launch_moveit:=false   # add activate_cameras:=true to record
 # terminal 2 (container) — teleop; wait for "Teleop ready"
 python3 ~/share/teleop_mantis.py
-# terminal 3 (host) — Quest publisher (defaults to USB adb, extrapolate mode)
+# terminal 3 (host) — Quest publisher (defaults to USB adb)
 ~/teleop_share/run_quest_pub.sh
 ```
 
@@ -244,9 +244,9 @@ python3 ~/share/teleop_mantis.py
 - Vive equivalents: `run_vive_pub.sh` and `run_teleop_mantis.sh`.
 - **Run only one publisher at a time** — they share the topics.
 
-`run_quest_pub.sh` is preconfigured (`QUEST_BACKEND=adb`, `QUEST_ADB_MODE=extrapolate`,
-`QUEST_ROT_OFFSET=-90,0,0`); every default is overridable, e.g.
-`QUEST_ADB_MODE=native ./run_quest_pub.sh` for the raw stream.
+`run_quest_pub.sh` is preconfigured (`QUEST_BACKEND=adb`, `QUEST_ROT_OFFSET=-90,0,0`); both are
+overridable on the command line. Over adb the publisher emits one message per headset sample,
+exactly as measured - it never predicts or resamples.
 
 ---
 
@@ -325,7 +325,7 @@ Confirm the cause directly (should read `POSITION`/6-DOF, not `ORIENTATION`):
 adb shell dumpsys OVRRemoteService | grep -iE "TrackingStatus|tracking lost"
 ```
 
-`extrapolate` mode keeps the arm smooth at ~50 Hz but cannot repair bad tracking — still reboot when the warning fires.
+There is no smoothing or prediction to hide a bad stream, so fix the headset when the warning fires.
 
 **Session monitor.** `teleop_monitor.py` (host) samples the whole system once a second and,
 afterward, correlates it with the teleop log, the driver log, and the recorded dataset — UDP
@@ -348,8 +348,7 @@ Three processes, split across the host and the container.
 
 1. **Controller publisher (`quest_pub.py`, host).** Reads the Quest pose over USB (adb → the
    `oculus_reader` APK, parsed via `adb logcat`) and republishes `/vive/pose` +
-   `/vive/buttons`. In `extrapolate` mode it resamples the raw ~50–70 Hz headset stream to a
-   steady 250 Hz predicted from the last two samples.
+   `/vive/buttons`, one message per headset sample (~70 Hz when tracking is healthy).
 2. **Teleop bridge (`teleop_mantis.py`, container).** On engage it anchors the controller
    pose to the arm and maps hand motion → a target EE pose (scaled, heading-normalized,
    one-euro filtered), solves joint velocities with **Pink differential IK** under a
@@ -411,7 +410,7 @@ within reach.**
 ## Files & environment variables
 
 See the config file for the full parameter set, and `quest_pub.py`'s header for the
-`QUEST_*` environment variables (backend, buttons, rates, extrapolation caps). Key files:
+`QUEST_*` environment variables (backend, buttons, rates). Key files:
 `teleop_mantis.py` (bridge), `config_teleop_mantis.yaml` (all tuning), `quest_pub.py` /
 `vive_pub.py` (publishers), `lerobot_recorder.py` (recorder), `lerobot_robot_mantis/` (replay
 plugin), `patches/` (workspace patches, applied by `setup_workstation.sh`),

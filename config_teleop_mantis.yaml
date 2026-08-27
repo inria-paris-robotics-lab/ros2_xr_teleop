@@ -14,6 +14,13 @@ arm_cmd_joints: [left_shoulder_pan_joint, left_shoulder_lift_joint, left_elbow_j
                  left_wrist_1_joint, left_wrist_2_joint, left_wrist_3_joint,
                  right_shoulder_pan_joint, right_shoulder_lift_joint, right_elbow_joint,
                  right_wrist_1_joint, right_wrist_2_joint, right_wrist_3_joint]
+# Joints commanded on `topics.arm_cmd_safety` (policy runs). MUST equal the safety filter
+# controller's `joints.active_joint`, in the same order: that controller claims the hardware
+# position interfaces of those joints ONLY and indexes the Float64MultiArray positionally,
+# not by name. Unlike arm_cmd_joints this is not the whole robot - the arm it does not claim
+# is held by whatever controller owns it.
+safety_filter_joints: [left_shoulder_pan_joint, left_shoulder_lift_joint, left_elbow_joint,
+                       left_wrist_1_joint, left_wrist_2_joint, left_wrist_3_joint]
 # Fallback pose for joints outside `arm` that never appear in /joint_states; the
 # collision model itself is baked at the measured pose taken before startup.
 locked_q: {}
@@ -182,7 +189,6 @@ teleop:
   shake_min_hz: 0.5           # Hz floor: slower than this is travel, not shake
   shake_split_hz: 3.0         # Hz boundary between the slow (felt) and the fast (buzz) band
   shake_max_hz: 25.0          # Hz ceiling of the fast band
-  debug_period: 0.5           # s between console dumps of the collision/singularity state (0 = off)
   # Warn in the log when the /vive/pose rate drops below this in a 10 s window. Healthy Quest
   # is ~70 Hz; a sustained ~50 Hz means the headset lost 6-DOF controller tracking (out of
   # camera view / warm after hours) -> choppy motion + laggy gripper. Reboot the headset. 0 = off.
@@ -264,6 +270,12 @@ record:
 
 topics:
   arm_cmd: /forward_position_controller/commands
+  # Policy runs command this instead (mantis_ws/src/safety_filter_controller): it rejects a
+  # reference that breaks its delta clamp or collides inside its lookahead horizon and
+  # republishes the last safe command, so the arm holds rather than jumps. Terminal
+  # controller - it replaces forward_position_controller, it does not sit in front of it,
+  # so exactly one of the two may be active at a time.
+  arm_cmd_safety: /safety_filter_controller/commands
   joint_states: /joint_states
   vive_pose: /vive/pose
   vive_buttons: /vive/buttons
