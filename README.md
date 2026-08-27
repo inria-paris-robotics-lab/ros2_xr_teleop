@@ -280,7 +280,10 @@ degraded stream produces choppy episodes. Then:
 
 Notes:
 - `record.fps` **must equal the camera stream rate** (a mismatch skews replay speed; the recorder warns).
-- Name a dataset with `RECORD_NAME=my_task` before launching the teleop.
+- Set the dataset **name** and **task** before launching the teleop:
+  `RECORD_NAME=my_task RECORD_TASK="pick up the mug" python3 ~/share/teleop_mantis.py`.
+  `RECORD_NAME` becomes the folder under `record.root` (and the `<hf_namespace>/my_task` push repo);
+  `RECORD_TASK` is the natural-language instruction stored with every frame (falls back to `record.task` in the config).
 - Episodes shorter than `record.min_frames` are discarded (why MENU is debounced).
 
 ## Replay
