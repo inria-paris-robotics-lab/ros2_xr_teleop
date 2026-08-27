@@ -1,5 +1,6 @@
 """LeRobot episode recorder for the mantis teleop (config section `record:`)."""
 import collections
+import json
 import os
 import re
 import queue
@@ -17,7 +18,7 @@ CAM_STALE_S = 1.5
 class EpisodeRecorder:
     def __init__(self, node, cfg):
         import teleop_mantis as T
-        from sensor_msgs.msg import Image
+        from sensor_msgs.msg import CameraInfo, Image
         from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
         self.T = T
@@ -52,6 +53,11 @@ class EpisodeRecorder:
         if self.primary not in self.color_keys:
             raise ValueError(f"record.primary_cam {self.primary!r} not in record.cameras")
         self.pair_tol_s = float(cfg.get("pair_tol_s", 0.75 / max(self.fps, 1)))
+        self.extrinsics_file = T._cfg_path(str(cfg.get(
+            "camera_extrinsics_file",
+            "mantis_ws/src/prl_ur5_robot_configuration/config/fixed_cameras/dataset_collection.yaml")))
+        self.cam_topics = dict(cams)
+        self._cam_info = {}
         self._pending = None
         self._dropped = 0
         self._skew_ms = {k: [] for k in self.cam_keys if k != self.primary}
@@ -78,6 +84,9 @@ class EpisodeRecorder:
             node.create_subscription(
                 Image, cams[key],
                 (lambda k: lambda m: self._on_image(k, m))(key), qos)
+            node.create_subscription(
+                CameraInfo, self._info_topic(cams[key]),
+                (lambda k: lambda m: self._on_camera_info(k, m))(key), qos)
 
         threading.Thread(target=self._preload, daemon=True).start()
         self.log.info(f"recorder: dataset {self.repo_id} at {self.root}, "
@@ -184,6 +193,101 @@ class EpisodeRecorder:
                             batch_encoding_size=self.batch)
             self.log.info(f"recorder: created new dataset at {self.root}")
         return ds
+
+    @staticmethod
+    def _info_topic(image_topic):
+        """camera_info topic that belongs to an image topic (its sibling in the same namespace)."""
+        return image_topic.rsplit("/", 1)[0] + "/camera_info"
+
+    def _on_camera_info(self, key, msg):
+        """Latch each stream's intrinsics; they never change while the driver runs."""
+        if key in self._cam_info:
+            return
+        self._cam_info[key] = {
+            "width": int(msg.width),
+            "height": int(msg.height),
+            "distortion_model": str(msg.distortion_model),
+            "K": [float(v) for v in msg.k],
+            "D": [float(v) for v in msg.d],
+            "R": [float(v) for v in msg.r],
+            "P": [float(v) for v in msg.p],
+        }
+
+    def _load_extrinsics(self):
+        """{camera prefix -> calibrated pose} from the fixed-cameras config, or {} if unreadable."""
+        try:
+            import yaml
+            with open(self.extrinsics_file) as f:
+                entries = yaml.safe_load(f) or []
+        except Exception as exc:
+            self.log.warn(f"recorder: camera extrinsics not read from {self.extrinsics_file} ({exc})")
+            return {}
+        out = {}
+        for e in entries:
+            if not isinstance(e, dict) or "name_prefix" not in e:
+                continue
+            out[str(e["name_prefix"])] = {
+                "type": e.get("type"),
+                "pose": e.get("pose"),
+                "offset": e.get("offset"),
+                "fixture_orientation": e.get("fixture_orientation"),
+            }
+        return out
+
+    @staticmethod
+    def _camera_prefix(topic):
+        """Driver name prefix of a camera topic: /camera/echo_camera/color/image_raw -> echo."""
+        for part in topic.strip("/").split("/"):
+            if part.endswith("_camera"):
+                return part[: -len("_camera")]
+        return None
+
+    def _write_camera_metadata(self):
+        """Write meta/intrinsics.json and meta/extrinsics.json, one entry per camera.
+
+        Depth is registered to its colour frame, so it shares that camera's intrinsics and pose
+        and gets no separate entry.
+
+        Sidecar files rather than keys in info.json: lerobot's DatasetInfo is a strict dataclass
+        and an unknown key there makes the dataset unloadable.
+        """
+        if self._dataset is None:
+            return
+        extr = self._load_extrinsics()
+        intrinsics, extrinsics = {}, {}
+        for key in self.color_keys:
+            topic = self.cam_topics.get(key, "")
+            prefix = self._camera_prefix(topic)
+            intrinsics[key] = {
+                "camera": prefix,
+                "topic": topic,
+                "camera_info_topic": self._info_topic(topic) if topic else None,
+                **(self._cam_info.get(key) or {}),
+            }
+            extrinsics[key] = {
+                "camera": prefix,
+                **(extr.get(prefix) or {}),
+            }
+        missing = [k for k in intrinsics if "K" not in intrinsics[k]]
+        if missing:
+            self.log.warn(f"recorder: no camera_info yet for {missing} -> intrinsics incomplete")
+        if extr:
+            self.log.info(f"recorder: camera extrinsics from {self.extrinsics_file}")
+        meta = Path(self._dataset.root) / "meta"
+        files = {
+            "intrinsics.json": {"cameras": intrinsics},
+            "extrinsics.json": {"source": self.extrinsics_file,
+                                "frame": "robot base (as configured in the fixed-cameras file)",
+                                "cameras": extrinsics},
+        }
+        try:
+            meta.mkdir(parents=True, exist_ok=True)
+            for fname, payload in files.items():
+                with open(meta / fname, "w") as f:
+                    json.dump(payload, f, indent=2)
+            self.log.info(f"recorder: camera intrinsics + extrinsics written to {meta}")
+        except Exception as exc:
+            self.log.warn(f"recorder: could not write camera metadata ({exc})")
 
     def _on_image(self, key, msg):
         self._img_msg[key] = (time.monotonic(), msg)
@@ -334,6 +438,7 @@ class EpisodeRecorder:
             except Exception as exc:
                 self.log.error(f"EPISODE not started: dataset open failed ({exc})")
                 return False
+            self._write_camera_metadata()
         self._frames = 0
         self._skew_ms = {k: [] for k in self.cam_keys if k != self.primary}
         self._skew_signed = {}
@@ -533,6 +638,7 @@ class EpisodeRecorder:
         """Clean teardown: finish the open episode, wait for the encoder, and finalize the dataset."""
         if self.recording:
             self.stop()
+        self._write_camera_metadata()
         t = self._save_thread
         if t is not None and t.is_alive():
             left = self._save_q.qsize()

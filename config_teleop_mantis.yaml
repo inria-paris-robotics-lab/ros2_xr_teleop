@@ -243,6 +243,10 @@ record:
   #         if the training side is on an older version.
   depth_as_video: true    # native lerobot >= 0.6 format; the READING side must also be >= 0.6
   primary_cam: left           # must be the femto-mega hardware-sync primary
+  # Calibrated camera poses, copied into meta/cameras.json of every dataset together with the
+  # intrinsics read off each camera_info topic. Path is relative to this file; re-run the
+  # calibration and the next recording picks the new values up on its own.
+  camera_extrinsics_file: mantis_ws/src/prl_ur5_robot_configuration/config/fixed_cameras/dataset_collection.yaml
   # Seconds a secondary image may differ from the primary's stamp. Default 0.75/fps = 50 ms.
   # Depth lags colour by a measured ~24 ms (p95 31), so the old 33 ms dropped ~16% of frames.
   pair_tol_s: 0.050
