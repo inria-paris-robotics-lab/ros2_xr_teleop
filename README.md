@@ -231,7 +231,7 @@ Canonical setup: robot stack and teleop **in the container**, controller publish
 
 ```bash
 # terminal 1 (container) — hardware; wait for "forward_position_controller ... activated"
-ros2 launch prl_ur5_run real.launch.py            # add activate_cameras:=true to record
+ros2 launch prl_ur5_run real.launch.py launch_moveit:=false   # add activate_cameras:=true to record
 # terminal 2 (container) — teleop; wait for "Teleop ready"
 python3 ~/share/teleop_mantis.py
 # terminal 3 (host) — Quest publisher (defaults to USB adb, extrapolate mode)
