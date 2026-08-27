@@ -2,9 +2,9 @@
 set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SHARE="${SHARE_DIR:-$HOME/rabota/docker_shared}"
+SHARE="${SHARE_DIR:-$HOME/teleop_share}"
 WS="$SHARE/mantis_ws"
-FP="${HOST_DEPS:-$HOME/rabota/mantis_host_deps/fakeprefix}"
+FP="${HOST_DEPS:-$HOME/mantis_host_deps/fakeprefix}"
 FORCE_FILES=0
 FORCE_PATCHES=0
 CONTAINER="${CONTAINER_NAME:-mantis}"
@@ -16,8 +16,8 @@ for arg in "$@"; do
         -h|--help)
             echo "usage: setup_workstation.sh [--force-files] [--force-patches]"
             echo
-            echo "  SHARE_DIR      container share dir      (default ~/rabota/docker_shared)"
-            echo "  HOST_DEPS      host package prefix      (default ~/rabota/mantis_host_deps/fakeprefix)"
+            echo "  SHARE_DIR      container share dir      (default ~/teleop_share)"
+            echo "  HOST_DEPS      host package prefix      (default ~/mantis_host_deps/fakeprefix)"
             echo "  CONTAINER_NAME running container name   (default mantis)"
             echo
             echo "  --force-files    overwrite teleop files already in the share dir"
@@ -129,7 +129,7 @@ else
 fi
 
 say "URDF: $WS/mantis.urdf"
-ROS_SETUP="${ROS_SETUP:-$HOME/rabota/SO-100-HTC-vive-teleop/.pixi/envs/default/setup.bash}"
+ROS_SETUP="${ROS_SETUP:-$HOME/SO-100-HTC-vive-teleop/.pixi/envs/default/setup.bash}"
 if [[ -f "$WS/mantis.urdf" ]]; then
     echo "  already generated, left as is (delete it to regenerate)"
 elif [[ ! -d "$FP/share/ur_description" || ! -d "$FP/share/orbbec_description" ]]; then
@@ -150,8 +150,9 @@ fi
 
 say "done"
 echo "next:"
-echo "  1. build the image and enter the container:"
-echo "       cd <this repo>/../docker-ros2 && ./start_docker.bash $CONTAINER $SHARE"
+echo "  1. build the image and enter the container (from the prl_ur5_ros2 clone that carries"
+echo "     the teleop Dockerfile patch — see README, 'The container image'):"
+echo "       cd ~/prl_ur5_ros2/docker-ros2 && ./start_docker.bash $CONTAINER $SHARE"
 echo "  2. inside it:  cd ~/share/mantis_ws && colcon build --symlink-install"
 echo "                 pip install -e ~/share/lerobot_robot_mantis"
 echo "  3. on the host: $SHARE/run_quest_pub.sh --scan"
