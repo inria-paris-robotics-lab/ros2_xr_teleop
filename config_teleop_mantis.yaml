@@ -182,7 +182,7 @@ teleop:
   shake_min_hz: 0.5           # Hz floor: slower than this is travel, not shake
   shake_split_hz: 3.0         # Hz boundary between the slow (felt) and the fast (buzz) band
   shake_max_hz: 25.0          # Hz ceiling of the fast band
-  debug_period: 0.5           # s between console pose dumps (0 = off)
+  debug_period: 0.5           # s between console dumps of the collision/singularity state (0 = off)
   # Warn in the log when the /vive/pose rate drops below this in a 10 s window. Healthy Quest
   # is ~70 Hz; a sustained ~50 Hz means the headset lost 6-DOF controller tracking (out of
   # camera view / warm after hours) -> choppy motion + laggy gripper. Reboot the headset. 0 = off.
@@ -210,7 +210,7 @@ gripper:
   effort: 5.0                 # grasping force hint [N]
   action: /left_gripper_controller/gripper_cmd
 
-# LeRobot episode recording (lerobot_recorder.py, needs `pip install lerobot`).
+# LeRobot episode recording (lerobot_recorder.py, needs lerobot >= 0.6).
 # MENU starts an episode, the next press stops it. Each color image from the
 # primary camera stores one frame together with the state/action at that instant.
 record:
@@ -231,7 +231,7 @@ record:
   # Optional 16UC1 depth, keyed by the colour camera it belongs to; each entry adds
   # observation.images.<name>_depth as a (H, W, 1) uint16 map in MILLIMETRES. The driver runs
   # with depth_registration: true, so it is already pixel-aligned to that camera's colour
-  # frame. Stored as PNG, not video - 8-bit AV1 cannot carry 16 bits. Comment out to drop
+  # frame. Stored per depth_as_video (below); never the 8-bit AV1 colour codec, which cannot carry 16 bits. Comment out to drop
   # depth; every listed stream must match the primary's trigger or the frame is skipped.
   depth_cameras:
     left: /camera/echo_camera/depth/image_raw
