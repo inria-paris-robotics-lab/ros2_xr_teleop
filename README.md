@@ -36,7 +36,10 @@ PRL **mantis** rig (dual UR5, left arm + Weiss WSG50 gripper), which the example
 **Software on the workstation**
 - Linux with a working **`docker`** (user in the `docker` group), plus an NVIDIA runtime if you use the GPU flags.
 - **`git`** and **`git-lfs`**.
-- **`adb`** (`android-tools-adb`) for the Quest-over-USB backend.
+- **`adb`** for the Quest-over-USB backend — an unpacked Google `platform-tools` in
+  `~/platform-tools`, first on `PATH`. It must be the *same* binary the adb-server
+  container runs (see [ADB on the workstation](#adb-on-the-workstation-adb-server-in-a-container));
+  a distro `android-tools-adb` on `PATH` will fight it over version mismatch.
 - ROS 2, the teleop Python stack, and lerobot all live inside the container image — you do **not** install them on the host.
 
 Only one step needs root: a udev rule so `adb` sees the headset (avoidable — see [TROUBLESHOOTING.md](TROUBLESHOOTING.md)). Everything else installs into your home directory.
@@ -183,14 +186,29 @@ docker run -d --name adb-server \
   nodaemon server
 ```
 
-Daily use:
+Daily use — **kill first, then start**, the order matters:
 
 ```bash
-docker start adb-server           # if it is not already up
-adb kill-server                   # kill any host-local server so clients use the container's
+adb kill-server                   # FIRST: kills whatever server owns 127.0.0.1:5037
+docker start adb-server           # then bring up the container's server
 adb devices                       # the headset should read 'device'
 adb shell am broadcast -a com.oculus.vrpowermanager.prox_close   # keep it awake while off your head
 ```
+
+`adb kill-server` is not "kill the host's server" — it connects to `127.0.0.1:5037` and kills
+whoever is listening there. Because the container shares the host network, once `adb-server` is
+up **that is the container's server**, and killing it takes the container down with it (the
+server is the entrypoint, and there is no restart policy — `docker logs adb-server` shows
+`adb server killed by remote request`). Run it the other way round and you have to
+`docker start adb-server` again.
+
+The host `adb` client does keep working against the container's server: `adb devices`,
+`adb shell`, `adb reboot` all behave normally from the host, because `--net=host` puts the
+server on the host's own `127.0.0.1:5037` and `adb` on `PATH` is the same pinned
+`~/platform-tools/adb` binary the container runs. Version parity is what matters — a
+*different* host adb (e.g. a distro `android-tools-adb`) would refuse to talk to it, print
+`adb server version doesn't match this client; killing...`, and silently take the container
+down. Keep `~/platform-tools` ahead of `/usr/bin` on `PATH`.
 
 If tracking degrades mid-session, `adb reboot` the headset (see [Health check](#health-check--diagnostics)).
 
