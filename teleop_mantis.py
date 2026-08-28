@@ -21,6 +21,7 @@ from pink.tasks import FrameTask, PostureTask
 from pink.limits import ConfigurationLimit, VelocityLimit
 from scipy.spatial import ConvexHull
 from ament_index_python.packages import get_package_share_directory
+from home_planner import HomePlanner
 
 path = os.environ.get("teleop_config", os.path.join(os.path.dirname(os.path.abspath(__file__)), "config_teleop_mantis.yaml"))
 with open(path) as f:
@@ -142,6 +143,23 @@ HOME_Q = np.radians(np.asarray(CFG["teleop"].get(
     "home_q_deg", [0.0, -110.0, 66.0, -90.0, -90.0, 0.0]), float))
 HOME_VEL = float(CFG["teleop"].get("home_vel", 0.3))
 HOME_CHECK_STEP = np.radians(float(CFG["teleop"].get("home_check_step_deg", 2.0)))
+# When the straight joint path to HOME_Q is blocked, search for another one instead of
+# refusing (home_planner.py: direct -> staged -> greedy -> detour -> RRT, relaxing the
+# collision cushion only if nothing routes at the full one). The straight ramp is still
+# tier one, so whenever it is legal the search never runs and the motion is unchanged.
+HOME_PLANNER = bool(CFG["teleop"].get("home_planner", True))
+# The search runs INLINE on the single-threaded executor, so this budget is also how long
+# the node stops answering the Quest, the buttons and the HOME cancel. 0.3 s covers every
+# tier that solved a real blocked pose in testing (60-151 ms). Raising it past ~0.5 s buys
+# only the RRT tier (1-4 s) and costs you a cancel you cannot press. Do that on a thread,
+# not by turning this up.
+HOME_PLAN_TIME_S = float(CFG["teleop"].get("home_plan_time_s", 0.3))
+HOME_FLOOR_SCALES = tuple(float(x) for x in CFG["teleop"].get(
+    "home_floor_scales", [1.0, 0.5, 0.0]))
+HOME_RRT_STEP = float(CFG["teleop"].get("home_rrt_step", 0.35))
+HOME_SMOOTH_TIME_S = float(CFG["teleop"].get("home_smooth_time_s", 0.3))
+HOME_ALLOW_PARTIAL = bool(CFG["teleop"].get("home_allow_partial", True))
+HOME_WAYPOINT_DWELL = float(CFG["teleop"].get("home_waypoint_dwell", 0.2))
 HOME_DEBOUNCE = float(CFG["teleop"].get("home_debounce", 0.5))
 MENU_DEBOUNCE = float(CFG["teleop"].get("menu_debounce", 0.5))
 HOME_DONE_TOL = float(CFG["teleop"].get("home_done_tol", 0.05))
@@ -1382,6 +1400,17 @@ class Bridge(Node):
         self._home_cur = None
         self._home_done_t = None
         self._home_stop_rec = False
+        # The ramp follows a WAYPOINT LIST. A clear straight path is the one-element list
+        # [HOME_Q], i.e. exactly the motion this file has always made; a planned detour is
+        # the same walk with more entries. _home_scale/_home_floor are the cushion the plan
+        # was certified at, which the live measured-pose gate has to be told about.
+        self._home_wps = None
+        self._home_i = 0
+        self._home_scale = 1.0
+        self._home_floor = 0.0
+        self._home_dwell_t = None
+        self._planner = None
+        self._planner_ik = None
         self._axlock_now = False
         self._axlock_was = False
         self._axlock_t = -1e9
@@ -1677,6 +1706,61 @@ class Bridge(Node):
                 return False, worst, worst_pair
         return True, worst, worst_pair
 
+    def _home_planner(self):
+        """The path search, built against this node's own collision model.
+
+        Keyed on the ik object: the model is rebuilt at startup when the parked joints turn
+        out to differ from locked_q, and a planner still holding the old one would be
+        planning around the other arm where it is not.
+        """
+        if self._planner is None or self._planner_ik is not self.ik:
+            lo = np.array([self.model.lowerPositionLimit[self.ik.qindex(j)] for j in ARM], float)
+            hi = np.array([self.model.upperPositionLimit[self.ik.qindex(j)] for j in ARM], float)
+
+            def margin_at(q_arm, floor_scale):
+                q = self.ik.neutral()
+                for j, v in zip(ARM, q_arm):
+                    q[self.ik.qindex(j)] = float(v)
+                return self.ik.margin_at(q, floor_scale)
+
+            self._planner = HomePlanner(
+                margin_at, ARM, lo, hi, HOME_CHECK_STEP,
+                floor_scales=HOME_FLOOR_SCALES, rrt_step=HOME_RRT_STEP,
+                smooth_time_s=HOME_SMOOTH_TIME_S, allow_partial=HOME_ALLOW_PARTIAL,
+                log=self.get_logger())
+            self._planner_ik = self.ik
+        return self._planner
+
+    def _home_refuse(self, m, pair, extra=""):
+        self.get_logger().error(
+            f"HOME refused: straight joint path collides ({pair} margin "
+            f"{1000.0 * m:.1f}mm){extra} — move the arm clear by hand/teleop first")
+        return None
+
+    def _plan_home_path(self, q_now, m, pair):
+        """The straight path is blocked - look for another one.
+
+        Returns (waypoints, floor_scale, floor_min, method) or None, having already logged
+        the refusal. Runs INLINE: see HOME_PLAN_TIME_S for why the budget is small.
+        """
+        if not HOME_PLANNER:
+            return self._home_refuse(m, pair)
+        hp = self._home_planner()
+        t0 = time.monotonic()
+        got = hp.plan(q_now, HOME_Q, t0 + HOME_PLAN_TIME_S)
+        dt = time.monotonic() - t0
+        if got is None:
+            return self._home_refuse(m, pair, f" and no clear path found in {dt:.2f}s")
+        path, scale, how, complete = got
+        floor = min(0.0, hp.margin(q_now, scale)[0])
+        relaxed = "" if scale >= 1.0 else f", cushion relaxed to {scale:.2f}x"
+        note = "" if complete else " — PARTIAL, it will stop short of home; press HOME again"
+        self.get_logger().warn(
+            f"HOME: straight path blocked by {pair} ({1000.0 * m:.1f}mm) — routing "
+            f"'{how}' via {len(path)} waypoint(s), found in {1000.0 * dt:.0f}ms"
+            f"{relaxed}{note}")
+        return list(path), scale, floor, how
+
     def _start_home(self, stop_recording_on_end=False):
         """Start the slow joint ramp to HOME_Q, or refuse it with a reason; returns True if the ramp started."""
         if self._home_active:
@@ -1700,11 +1784,20 @@ class Bridge(Node):
                                         f"{v:+.3f} rad, outside its limits")
                 return False
         ok, m, pair = self._home_path_clear(q_now)
-        if not ok:
-            self.get_logger().error(
-                f"HOME refused: straight joint path collides ({pair} margin "
-                f"{1000.0 * m:.1f}mm) — move the arm clear by hand/teleop first")
-            return False
+        if ok:
+            # Unchanged: one leg, straight to home, certified at the full cushion. The
+            # waypoint walk below reduces to exactly the ramp this file has always made.
+            wps, scale, floor, how = [HOME_Q.copy()], 1.0, 0.0, None
+        else:
+            got = self._plan_home_path(q_now, m, pair)
+            if got is None:
+                return False
+            wps, scale, floor, how = got
+        self._home_wps = [np.asarray(w, float) for w in wps]
+        self._home_i = 0
+        self._home_scale = float(scale)
+        self._home_floor = float(floor)
+        self._home_dwell_t = None
         start = q_now
         if self._last_cmd is not None and len(self._last_cmd) == len(q_now) \
                 and float(np.max(np.abs(self._last_cmd - q_now))) <= MAX_JOINT_LEAD:
@@ -1723,10 +1816,16 @@ class Bridge(Node):
         if self._grip_want_closed:
             self._grip_want_closed = False
             self.get_logger().info("HOME: gripper -> OPEN")
-        t_est = float(np.max(np.abs(HOME_Q - start))) / max(self._home_v, 1e-6)
+        legs = [np.asarray(start, float)] + self._home_wps
+        dist = sum(float(np.max(np.abs(b - a))) for a, b in zip(legs, legs[1:]))
+        t_est = (dist / max(self._home_v, 1e-6)
+                 + HOME_WAYPOINT_DWELL * (len(self._home_wps) - 1))
+        detail = (f"path clear, worst margin {1000.0 * m:.1f}mm" if how is None else
+                  f"routed '{how}', {len(self._home_wps)} legs at "
+                  f"{self._home_scale:.2f}x cushion")
         self.get_logger().info(
             f"HOME: moving to home pose (~{t_est:.1f}s at {self._home_v:.2f} rad/s, "
-            f"path clear, worst margin {1000.0 * m:.1f}mm)")
+            f"{detail})")
         return True
 
     def _end_home(self, reason, done):
@@ -1734,6 +1833,11 @@ class Bridge(Node):
         self._home_active = False
         self._home_cur = None
         self._home_done_t = None
+        self._home_wps = None
+        self._home_i = 0
+        self._home_dwell_t = None
+        self._home_scale = 1.0
+        self._home_floor = 0.0
         if self._home_stop_rec:
             self._home_stop_rec = False
             if self.recorder is not None:
@@ -1764,12 +1868,18 @@ class Bridge(Node):
             q_meas = self.ik.neutral()
             for j in ARM:
                 q_meas[self.ik.qindex(j)] = self.pos[j]
-            m_meas, m_pair = self.ik.margin_at(q_meas, MEAS_GATE_FRAC)
-            if m_meas < 0.0:
+            # Never armed above the clearance the plan itself was certified at: at the fixed
+            # 0.6x this would fire on the first tick of every relaxed-cushion route, i.e.
+            # exactly the routes that had to be relaxed to exist. For a clear straight path
+            # (scale 1.0, floor 0.0) this is bit-for-bit the old check.
+            g_scale = min(MEAS_GATE_FRAC, self._home_scale)
+            m_meas, m_pair = self.ik.margin_at(q_meas, g_scale)
+            if m_meas < self._home_floor:
                 self._end_home(f"ABORTED — measured pose inside safety gate "
-                               f"({m_pair} {1000.0 * m_meas:.1f}mm)", done=False)
+                               f"({m_pair} {1000.0 * m_meas:.1f}mm at {g_scale:.2f}x)", done=False)
                 return
-        delta = HOME_Q - self._home_cur
+        tgt = self._home_wps[self._home_i]
+        delta = tgt - self._home_cur
         dmax = float(np.max(np.abs(delta)))
         step = self._home_v * dt
         if dmax > step:
@@ -1777,15 +1887,33 @@ class Bridge(Node):
             self._last_cmd = self._home_cur.copy()
             self.send_arm(self._home_cur)
             return
-        self._home_cur = HOME_Q.copy()
+        self._home_cur = tgt.copy()
         self._last_cmd = self._home_cur.copy()
         self.send_arm(self._home_cur)
+        if self._home_i < len(self._home_wps) - 1:
+            # An intermediate waypoint. Dwell before turning: the shaper rounds corners
+            # (accel limit plus the v/out_kp standing lag) and a rounded corner is the one
+            # part of the motion the polyline check did NOT certify.
+            if self._home_dwell_t is None:
+                self._home_dwell_t = now
+            elif now - self._home_dwell_t >= HOME_WAYPOINT_DWELL:
+                self._home_i += 1
+                self._home_dwell_t = None
+            return
         if self._home_done_t is None:
             self._home_done_t = now
         q_meas = np.array([self.pos[j] for j in ARM], float)
-        lag = float(np.max(np.abs(q_meas - HOME_Q)))
+        # Against the last WAYPOINT, which for any complete route is HOME_Q itself; a
+        # partial route ends short on purpose and is reported as such rather than as a
+        # robot that failed to settle.
+        lag = float(np.max(np.abs(q_meas - tgt)))
         if lag < HOME_DONE_TOL:
-            self._end_home("reached", done=True)
+            gap = float(np.max(np.abs(q_meas - HOME_Q)))
+            if gap < HOME_DONE_TOL:
+                self._end_home("reached", done=True)
+            else:
+                self._end_home(f"partial route finished, still {gap:.3f} rad from home "
+                               f"— press HOME again to search on from here", done=False)
         elif (now - self._home_done_t) > HOME_SETTLE_GRACE:
             self._end_home(f"command at home but the robot settled {lag:.3f} rad "
                            f"away after {HOME_SETTLE_GRACE:.0f}s — check the arm", done=False)

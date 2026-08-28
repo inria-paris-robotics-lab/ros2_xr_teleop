@@ -148,6 +148,25 @@ teleop:
                               # episode and stops it again before min_frames is reached
   home_done_tol: 0.05         # rad, measured-vs-home that counts as arrived
   home_settle_grace: 3.0      # s to wait for the measured settle after the command arrives
+  # HOME path search (home_planner.py). The straight ramp above is still tier one, so when
+  # it is clear none of this runs and the motion is exactly what it always was. When it is
+  # blocked, instead of refusing, look for another route: one joint GROUP home first, then
+  # one joint at a time, then a deliberate step backwards, then RRT-Connect.
+  home_planner: true
+  # The search runs INLINE on the single-threaded executor, so this is also how long the
+  # node stops answering the Quest, the buttons and the HOME cancel. Measured on this cell:
+  # every real blocked pose was solved by the group/one-joint tiers in 60-160 ms. Raising
+  # this past ~0.5 s only buys the RRT tier (1-4 s) and costs a cancel you cannot press.
+  home_plan_time_s: 0.3
+  # Fractions of the collision cushion (ik.d_min*) to search at, in order. The cushion is a
+  # safety margin on top of real contact and is usually what blocks a home; 0.0 means real
+  # geometric contact only. No pose on a route may ever be worse than the one the arm is
+  # already in. Set to [1.0] to forbid relaxing.
+  home_floor_scales: [1.0, 0.5, 0.0]
+  home_allow_partial: true    # accept a route that only gets CLOSER; press HOME again to continue
+  home_waypoint_dwell: 0.2    # s paused at each corner, so the shaper's rounding stays on the checked path
+  home_rrt_step: 0.35         # rad, RRT-Connect extension step (only reachable with a large home_plan_time_s)
+  home_smooth_time_s: 0.3     # s budget to shortcut-smooth an RRT result
   # Degraded-tracking hold: when the glitch gate rejects this often, the stream has
   # stopped being a measurement -> hold the target (the same path a dropout takes).
   degrade_max_rate: 5.0       # rejects/s (0 = follow the stream regardless)
