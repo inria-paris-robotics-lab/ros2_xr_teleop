@@ -172,8 +172,8 @@ adb client (the host `adb`, the ROS container, and `quest_pub` via `ppadb`) talk
 server on `127.0.0.1:5037`.
 
 Why a container: a pinned `platform-tools` adb binary (read-only bind), USB via
-`--privileged --device=/dev/bus/usb`, auth persisted through `~/.android` (approve "Allow USB
-debugging" once), and one shared server via `--net=host`. Create it once:
+`--privileged --device=/dev/bus/usb`, the adb auth key persisted through `~/.android`, and one
+shared server via `--net=host`. Create it once:
 
 ```bash
 docker run -d --name adb-server \
@@ -191,9 +191,18 @@ Daily use — **kill first, then start**, the order matters:
 ```bash
 adb kill-server                   # FIRST: kills whatever server owns 127.0.0.1:5037
 docker start adb-server           # then bring up the container's server
+                                  # >>> put the headset ON and accept "Allow USB debugging" <<<
 adb devices                       # the headset should read 'device'
 adb shell am broadcast -a com.oculus.vrpowermanager.prox_close   # keep it awake while off your head
 ```
+
+**The headset prompts every time the server restarts.** Starting `adb-server` starts a fresh
+adb server, which re-handshakes with the Quest, and the Quest pops "Allow USB debugging?" —
+inside the headset, where you will not see it unless you put it on. Until you tap **Allow**,
+`adb devices` reads `unauthorized` and `quest_pub` cannot attach. So: `docker start`, headset
+on, accept, *then* `adb devices`. Ticking "Always allow from this computer" makes the prompt
+stick for the current key, but a `kill-server`/restart cycle or a headset reboot usually brings
+it back — treat the prompt as part of the daily routine, not a one-off.
 
 `adb kill-server` is not "kill the host's server" — it connects to `127.0.0.1:5037` and kills
 whoever is listening there. Because the container shares the host network, once `adb-server` is
